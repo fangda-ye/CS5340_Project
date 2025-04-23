@@ -82,9 +82,9 @@ This script generates the Noise Prompt Dataset (NPD) using a base diffusion mode
 **Command:**
 ```bash
 python src/generate_npd.py \
-	--prompt_file <path/to/your/prompts.txt_or_csv> \
+	--prompt_file ./data/prompts.txt \
 	--output_dir ./data/npd_dataset_sdxl/ \
-	--max_samples 10000 # (Optional) Limit number of selected pairs
+	--max_samples 10 # (Optional) Limit number of selected pairs
 	# Add other arguments as needed (e.g., --output_size)
 ```
 
