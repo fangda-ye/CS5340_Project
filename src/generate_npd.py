@@ -9,7 +9,7 @@ import pandas as pd # For handling prompts
 import time # For basic profiling
 
 # Diffusers imports
-from diffusers import StableDiffusionXLPipeline, DDIMScheduler
+from diffusers import StableDiffusionXLPipeline, DDIMScheduler, DPMSolverMultistepScheduler
 from diffusers.utils.torch_utils import randn_tensor
 
 # HPSv2 import
@@ -469,4 +469,3 @@ if __name__ == "__main__":
         print("No data pairs were selected or generated.")
 
     print("Dataset generation script finished.")
-
