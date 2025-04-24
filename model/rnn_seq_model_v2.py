@@ -89,68 +89,70 @@ class ResNetCNNEncoder(nn.Module):
 
 # --- Enhanced CNN Decoder with FiLM ---
 class ResNetCNNDecoderFiLM(nn.Module):
-    """ ResNet style CNN Decoder with FiLM conditioning """
+    """ ResNet style CNN Decoder with FiLM conditioning (Corrected FiLM application) """
     def __init__(self, feat_dim=512, text_embed_dim=1280, target_chans=4, target_size=128,
                     base_filters=32, num_blocks_per_stage=[2, 2, 2], groups=8):
         super().__init__()
         self.target_chans = target_chans
         self.target_size = target_size
 
-        # Calculate initial channels and spatial size for ConvTranspose
         num_stages = len(num_blocks_per_stage)
         initial_chans = base_filters * (2**(num_stages - 1))
-        initial_size = target_size // (2**(num_stages - 1)) # Size after last downsample in encoder
+        initial_size = target_size // (2**(num_stages - 1))
         if initial_size < 1: initial_size = 1
 
         self.initial_fc = nn.Linear(feat_dim, initial_chans * initial_size * initial_size)
         self.initial_reshape_size = (initial_chans, initial_size, initial_size)
 
-        self.stages = nn.ModuleList()
+        self.res_blocks = nn.ModuleList()
         self.film_generators = nn.ModuleList()
+        self.upsamplers = nn.ModuleList()
+        self.film_layer = FiLMLayer() # Instantiate FiLM layer
+
         current_chans = initial_chans
-
         for i in range(num_stages - 1, -1, -1): # Iterate backwards
-            stage_layers = []
-            out_chans = base_filters * (2**(i-1)) if i > 0 else base_filters # Channels before upsampling
-
-            # Add ResBlocks first
+            # --- ResBlocks for this stage ---
+            stage_res_blocks = []
             for _ in range(num_blocks_per_stage[i]):
-                stage_layers.append(ResBlock(current_chans, current_chans, groups=groups))
+                stage_res_blocks.append(ResBlock(current_chans, current_chans, groups=groups))
+            self.res_blocks.append(nn.Sequential(*stage_res_blocks)) # Add ResBlocks for this stage
 
-            # Upsample (except for the last stage output)
-            if i > 0:
-                    stage_layers.append(nn.ConvTranspose2d(current_chans, out_chans, kernel_size=4, stride=2, padding=1))
-            else: # Last stage before final conv
-                    out_chans = current_chans # No channel change before final conv
-
-            self.stages.append(nn.Sequential(*stage_layers))
-
-            # FiLM generator for the *output* of this stage (or input to next ResBlock stage)
-            # Modulate channels *before* upsampling or final conv
+            # --- FiLM Generator for this stage's output ---
+            # Generates params based on current_chans (output of ResBlocks)
             film_out_dim = current_chans * 2 # gamma and beta
             self.film_generators.append(nn.Linear(text_embed_dim, film_out_dim))
 
-            current_chans = out_chans # Update channels for next stage
+            # --- Upsampler (ConvTranspose) for this stage ---
+            # Upsample channels for the *next* stage (i-1) or final output
+            out_chans = base_filters * (2**(i-1)) if i > 0 else base_filters
+            if i > 0: # Add upsampler unless it's the last stage before final conv
+                    self.upsamplers.append(nn.ConvTranspose2d(current_chans, out_chans, kernel_size=4, stride=2, padding=1))
+                    current_chans = out_chans # Update channels for the next stage input
+            else:
+                    # Keep current_chans for the final convolution
+                    self.upsamplers.append(nn.Identity()) # No upsampling needed here
 
         # Final convolution to get target channels
         self.final_conv = nn.Conv2d(current_chans, target_chans, kernel_size=3, padding=1)
-        self.film_layer = FiLMLayer()
+
 
     def forward(self, x, text_embed):
         # Project and reshape feature vector from GRU hidden state
         x = self.initial_fc(x)
         x = x.view(-1, *self.initial_reshape_size) # [B, C_init, H_init, W_init]
 
-        stage_idx = 0
-        for stage in self.stages:
-            x = stage(x)
-            # Apply FiLM using corresponding generator
-            if stage_idx < len(self.film_generators):
-                    film_params = self.film_generators[stage_idx](text_embed) # [B, C*2]
-                    gamma, beta = torch.chunk(film_params, 2, dim=-1) # [B, C], [B, C]
-                    x = self.film_layer(x, gamma, beta)
-                    stage_idx += 1
+        # Iterate through stages (ResBlocks -> FiLM -> Upsample)
+        for i in range(len(self.res_blocks)):
+            # Apply ResBlocks
+            x = self.res_blocks[i](x)
 
+            # Apply FiLM using corresponding generator
+            film_params = self.film_generators[i](text_embed) # [B, C*2]
+            gamma, beta = torch.chunk(film_params, 2, dim=-1) # [B, C], [B, C]
+            x = self.film_layer(x, gamma, beta) # Modulate features
+
+            # Apply Upsampler
+            x = self.upsamplers[i](x)
 
         # Final convolution
         x = self.final_conv(x)
@@ -160,6 +162,80 @@ class ResNetCNNDecoderFiLM(nn.Module):
                 x = F.interpolate(x, size=(self.target_size, self.target_size), mode='bilinear', align_corners=False)
 
         return x
+
+# # --- Enhanced CNN Decoder with FiLM ---
+# class ResNetCNNDecoderFiLM(nn.Module):
+#     """ ResNet style CNN Decoder with FiLM conditioning """
+#     def __init__(self, feat_dim=512, text_embed_dim=1280, target_chans=4, target_size=128,
+#                     base_filters=32, num_blocks_per_stage=[2, 2, 2], groups=8):
+#         super().__init__()
+#         self.target_chans = target_chans
+#         self.target_size = target_size
+
+#         # Calculate initial channels and spatial size for ConvTranspose
+#         num_stages = len(num_blocks_per_stage)
+#         initial_chans = base_filters * (2**(num_stages - 1))
+#         initial_size = target_size // (2**(num_stages - 1)) # Size after last downsample in encoder
+#         if initial_size < 1: initial_size = 1
+
+#         self.initial_fc = nn.Linear(feat_dim, initial_chans * initial_size * initial_size)
+#         self.initial_reshape_size = (initial_chans, initial_size, initial_size)
+
+#         self.stages = nn.ModuleList()
+#         self.film_generators = nn.ModuleList()
+#         current_chans = initial_chans
+
+#         for i in range(num_stages - 1, -1, -1): # Iterate backwards
+#             stage_layers = []
+#             out_chans = base_filters * (2**(i-1)) if i > 0 else base_filters # Channels before upsampling
+
+#             # Add ResBlocks first
+#             for _ in range(num_blocks_per_stage[i]):
+#                 stage_layers.append(ResBlock(current_chans, current_chans, groups=groups))
+
+#             # Upsample (except for the last stage output)
+#             if i > 0:
+#                     stage_layers.append(nn.ConvTranspose2d(current_chans, out_chans, kernel_size=4, stride=2, padding=1))
+#             else: # Last stage before final conv
+#                     out_chans = current_chans # No channel change before final conv
+
+#             self.stages.append(nn.Sequential(*stage_layers))
+
+#             # FiLM generator for the *output* of this stage (or input to next ResBlock stage)
+#             # Modulate channels *before* upsampling or final conv
+#             film_out_dim = current_chans * 2 # gamma and beta
+#             self.film_generators.append(nn.Linear(text_embed_dim, film_out_dim))
+
+#             current_chans = out_chans # Update channels for next stage
+
+#         # Final convolution to get target channels
+#         self.final_conv = nn.Conv2d(current_chans, target_chans, kernel_size=3, padding=1)
+#         self.film_layer = FiLMLayer()
+
+#     def forward(self, x, text_embed):
+#         # Project and reshape feature vector from GRU hidden state
+#         x = self.initial_fc(x)
+#         x = x.view(-1, *self.initial_reshape_size) # [B, C_init, H_init, W_init]
+
+#         stage_idx = 0
+#         for stage in self.stages:
+#             x = stage(x)
+#             # Apply FiLM using corresponding generator
+#             if stage_idx < len(self.film_generators):
+#                     film_params = self.film_generators[stage_idx](text_embed) # [B, C*2]
+#                     gamma, beta = torch.chunk(film_params, 2, dim=-1) # [B, C], [B, C]
+#                     x = self.film_layer(x, gamma, beta)
+#                     stage_idx += 1
+
+
+#         # Final convolution
+#         x = self.final_conv(x)
+
+#         # Ensure output size matches target (optional interpolation)
+#         if x.shape[-2:] != (self.target_size, self.target_size):
+#                 x = F.interpolate(x, size=(self.target_size, self.target_size), mode='bilinear', align_corners=False)
+
+#         return x
 
 # --- Main Improved RNN Sequence Model ---
 class NoiseSequenceRNN_v2(nn.Module):

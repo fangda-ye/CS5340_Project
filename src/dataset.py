@@ -90,8 +90,9 @@ class NoisePromptSequenceDataset(Dataset):
                     print(f"Warning: Golden sequence file {sequence_path} for index {idx} is not a valid list or is empty. Skipping.")
                     return None
 
-            # Stack the list into a single tensor [SeqLen, C, H, W] and convert dtype
+            # Stack the list into a single tensor [SeqLen, 1, C, H, W] and convert dtype
             golden_sequence = torch.stack([t.to(torch.float32) for t in golden_sequence_list], dim=0)
+            golden_sequence = golden_sequence.squeeze(1) # [SeqLen, C, H, W]
 
             # Verify sequence length
             actual_seq_len = golden_sequence.shape[0]

@@ -61,6 +61,7 @@ def main(args):
         kwargs_handlers=[ddp_kwargs]
     )
     device = accelerator.device
+    if accelerator.is_main_process: os.makedirs(args.output_dir, exist_ok=True)
     if accelerator.is_main_process: accelerator.init_trackers("rnn_v2_seq_model_training")
     accelerator.print(f"Using device: {device}, Mixed precision: {args.mixed_precision}")
     accelerator.print(f"Effective batch size: {args.batch_size * accelerator.num_processes * args.gradient_accumulation_steps}")
@@ -174,10 +175,10 @@ def main(args):
                 if batch is None: accelerator.print(f"Warning: Skipping empty batch at step {step}."); continue
 
                 with accelerator.accumulate(model):
-                prompts = batch['prompt']
-                source_noise = batch['source_noise']       # [B, C, H, W]
-                golden_sequence = batch['golden_sequence'] # [B, SeqLen, C, H, W]
-                B, T_target, C, H, W = golden_sequence.shape
+                    prompts = batch['prompt']
+                    source_noise = batch['source_noise']       # [B, C, H, W]
+                    golden_sequence = batch['golden_sequence'] # [B, SeqLen, C, H, W]
+                    B, T_target, C, H, W = golden_sequence.shape
 
                 # Prepare Model Inputs & Targets
                 input_noise_seq = torch.cat([source_noise.unsqueeze(1), golden_sequence[:, :-1]], dim=1) # [B, T_target, C, H, W]
@@ -340,5 +341,4 @@ if __name__ == "__main__":
     # Convert cnn_num_blocks from string list if needed (though nargs='+' should handle it)
     # args.cnn_num_blocks = [int(b) for b in args.cnn_num_blocks]
 
-    if accelerator.is_main_process: os.makedirs(args.output_dir, exist_ok=True)
     main(args)
