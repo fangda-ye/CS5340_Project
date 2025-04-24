@@ -115,8 +115,8 @@ def main(args):
         # Use the model's generate_sequence method
         # Ensure inputs are float32 if model expects it internally during generation
         generated_noise_sequence = rnn_model.generate_sequence(
-            initial_noise=initial_latents.to(torch.float32),
-            text_embed=text_embed.to(torch.float32),
+            initial_noise=initial_latents.to(dtype),
+            text_embed=text_embed.to(dtype),
             num_steps=args.num_gen_steps
         )
         # Select the final noise state and convert to inference dtype

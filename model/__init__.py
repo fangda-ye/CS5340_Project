@@ -11,7 +11,6 @@ except ImportError as e:
     print(f"Warning: Could not import original NPNet components: {e}")
     # Define dummy classes if needed
     class Attention: pass
-    class DropPath: pass
     class NoiseTransformer: pass
     class SVDNoiseUnet: pass
     class SVDNoiseUnet_Concise: pass
@@ -53,7 +52,7 @@ __all__ = []
 
 if ORIGINAL_NPNet_AVAILABLE:
     __all__.extend([
-        'Attention', 'DropPath', 'NoiseTransformer', 'SVDNoiseUnet',
+        'Attention', 'NoiseTransformer', 'SVDNoiseUnet',
         'SVDNoiseUnet_Concise', 'CrossAttention', 'NPNet'
     ])
 
