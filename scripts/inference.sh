@@ -21,4 +21,8 @@ PYTHONPATH=. python src/inference_rnn.py \
     --generate_standard  \
     --dtype float16
 
-    A photo of a blue cow and a black computer keyboard
+PYTHONPATH=. python scripts/batch_inference.py \
+    --prompt_file ./data/test_prompts.txt \
+    --output_base_dir ./inference_output/ \
+    --rnn_weights_path ./output/rnn_v3_seq_model_output/rnn_v3_model_final.pth \
+    --base_model_id stabilityai/stable-diffusion-xl-base-1.0 \

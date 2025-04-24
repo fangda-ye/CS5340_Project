@@ -1,265 +1,244 @@
-# Golden Noise for Diffusion Models - 序列演化实现
+# Sequential Golden Noise Generation with RNN
 
-本项目基于论文 "Golden Noise for Diffusion Models: A Learning Framework" (arXiv:2411.09502) 的概念，并探索了一种**序列化**生成“黄金噪声”的方法。项目包含以下功能：
+This project explores the concept of generating a sequence of "golden noises" for text-to-image diffusion models, inspired by the ideas in "Golden Noise for Diffusion Models: A Learning Framework" (arXiv:2411.09502). Instead of predicting a single optimal noise, this implementation focuses on modeling the *evolutionary process* where noise is iteratively refined based on a text prompt, using a Recurrent Neural Network (RNN) based architecture (`NoiseSequenceRNN_v3`).
 
-1.  **提取 Prompts:** 从标准数据集中提取文本提示。
-2.  **生成噪声序列数据集 (NPD):** 使用基础扩散模型（如 SDXL）和 DDIM 逆向过程，为每个 prompt 生成一个从初始噪声 $x_T$ 逐步演化到 $x'_n$ 的噪声序列 $[x'_1, ..., x'_n]$。
-3.  **训练模型:**
-	* 训练原始论文提出的 NPNet 模型（作为基线）。
-	* 训练基于 Transformer 的序列模型 (`NoiseSequenceTransformer`) 来预测噪声序列。
-	* 训练基于 RNN (GRU) 的改进序列模型 (`NoiseSequenceRNN_v2`) 来预测噪声序列（包含 ResNet 风格 CNN、FiLM 条件和残差预测选项）。
-4.  **推理:** 使用训练好的模型（目前主要支持原始 NPNet）生成黄金噪声并结合基础扩散模型生成图像。
-5.  **评估:** 使用评估脚本（目前主要支持原始 NPNet）比较标准噪声和黄金噪声生成的图像质量（例如使用 HPSv2）。
+The core workflow involves:
+1.  Generating a dataset where each sample contains an initial noise ($x_T$) and a sequence of subsequent noises ($[x'_1, ..., x'_n]$) obtained through iterative DDIM Denoise/Inversion steps conditioned on a text prompt ($c$).
+2.  Training an RNN model (`NoiseSequenceRNN_v3`) to learn the conditional transition $p_\theta(x'_k | x'_{k-1}, c)$, predicting the distribution of the next noise state.
+3.  Using the trained RNN model during inference to generate a sequence of refined noises and using the final noise ($\hat{x}'_n$) as an improved starting point for a standard diffusion model (e.g., SDXL).
 
-## 项目结构
+## Project Structure
 
 ```
 CS5340_PROJECT/
-├── data/                     # 数据集目录
-│   ├── pickapic_prompts.txt  # 提取的 prompts 文件 (示例)
-│   └── npd_sequence_dataset_sdxl/ # 生成的序列数据集 (示例)
-│       ├── sequences/        # 保存的噪声序列文件 (.pt)
-│       └── metadata.csv      # 元数据
-├── model/                    # 模型定义
+├── data/                     # Datasets
+│   ├── prompts.txt           # Input prompts for dataset generation
+│   ├── test_prompts.txt      # Prompts for evaluation/testing
+│   └── npd_sequence_dataset_sdxl/ # Generated sequence dataset (example)
+│       ├── sequences/        # Saved noise sequence files (.pt)
+│       └── metadata.csv      # Metadata linking prompts and sequence files
+├── doc/                      # Documentation (optional)
+├── inference_output/         # Default output directory for inference images
+│   ├── standard_output/      # Images from standard noise
+│   └── gnsnet_output/        # Images from golden noise (RNN output)
+├── model/                    # Model definitions
 │   ├── __init__.py
-│   ├── Attention.py
-│   ├── NoiseTransformer.py
-│   ├── SVDNoiseUnet.py
-│   ├── npnet.py              # 原始 NPNet 模型 + CrossAttention
-│   ├── seq_model.py          # Transformer 序列模型
-│   └── rnn_seq_model_v2.py   # RNN 序列模型 (v1 可能在此或单独文件)
-├── scripts/                  # 辅助脚本
-│   └── extract_prompts.py    # 提取 prompts 脚本
-├── src/                      # 主要源码
-│   ├── generate_npd.py       # 生成 NPD 序列数据集脚本
-│   ├── dataset.py            # PyTorch Dataset 和 DataLoader
-│   ├── train.py              # 训练原始 NPNet 脚本
-│   ├── train_seq_model.py    # 训练 Transformer 序列模型脚本
-│   ├── train_rnn_model_v2.py # 训练 RNN v2 序列模型脚本
-│   ├── inference.py          # 使用 NPNet 生成图像脚本
-│   └── evaluate.py           # 评估 NPNet 脚本
-├── requirements.txt          # Python 依赖
-└── README.md                 # 本文档
+│   └── rnn_seq_model_v3.py   # RNN Sequence Model (V3) definition
+├── output/                   # Default output directory for training checkpoints
+│   └── rnn_v3_seq_model_output/ # Example training output dir
+├── references/               # Reference papers (optional)
+├── results/                  # Default output directory for evaluation results
+├── scripts/                  # Utility and evaluation scripts
+│   ├── batch_inference.py    # Generate images for multiple prompts
+│   ├── evaluate_hps.py       # Evaluate generated images using HPSv2
+│   ├── evalute.sh            # Example evaluation script (shell)
+│   ├── extract_prompts.py    # Extract prompts from Hugging Face dataset
+│   ├── generate_test_prompts.py # (Utility for creating test prompts)
+│   ├── inference.sh          # Example inference script (shell)
+│   └── train.sh              # Example training script (shell)
+├── src/                      # Core source code
+│   ├── dataset.py            # PyTorch Dataset and DataLoader for sequence data
+│   ├── generate_npd_series.py # Script to generate the noise sequence dataset
+│   ├── inference_rnn.py      # Script to run inference with the RNN model
+│   └── train_rnn_model_v3.py # Script to train the RNN model (V3)
+├── LICENSE                   # Project License
+└── README.md                 # This file
 ```
+*(Note: Original NPNet related files like `NoiseTransformer.py`, `SVDNoiseUnet.py`, `npnet.py`, `train.py` etc. are assumed removed as per user request)*
 
-## 环境设置
+## Setup
 
-1.  **前提条件:**
+1.  **Prerequisites:**
 	* Python 3.8+
-	* PyTorch (推荐 CUDA 版本)
-	* CUDA Toolkit (如果使用 GPU)
+	* PyTorch (CUDA recommended)
+	* CUDA Toolkit & compatible NVIDIA driver (if using GPU)
 
-2.  **克隆仓库:**
+2.  **Clone Repository:**
 	```bash
 	git clone <your-repo-url>
 	cd CS5340_PROJECT
 	```
 
-3.  **安装依赖:**
-	强烈建议使用 Conda 或 venv 创建虚拟环境。
+3.  **Create Environment & Install Dependencies:**
+	Using Conda is recommended:
 	```bash
-	# conda create -n golden_env python=3.8 -c conda-forge -y
-	# conda activate golden_env
+	conda create -n golden_rnn python=3.8 -c conda-forge -y
+	conda activate golden_rnn
+	# Install PyTorch matching your CUDA version (check PyTorch website)
+	# Example for CUDA 11.8:
+	# conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
+	# Example for CUDA 12.1:
+	# conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+
+	# Install other dependencies
 	pip install -r requirements.txt
 	```
 
-## `requirements.txt` (示例)
+## `requirements.txt` (Example)
 
 ```txt
-torch>=1.13.0
-torchvision
-torchaudio
-# 选择与你的 PyTorch 和 CUDA 匹配的版本
-# pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu118](https://download.pytorch.org/whl/cu118) # (例如 CUDA 11.8)
+# PyTorch (Install via Conda specific to your CUDA version first)
+# torch>=1.13.0
+# torchvision
+# torchaudio
 
-diffusers>=0.21.0 # 确保版本支持 SDXL 等模型
+# Core Libraries
+diffusers>=0.21.0
 transformers>=4.25.0
 accelerate>=0.20.0
 pandas>=1.3.0
 numpy>=1.20.0
 Pillow>=9.0.0
 tqdm>=4.60.0
-einops>=0.6.0
-timm>=0.6.0 # For Swin Transformer
-hpsv2>=0.1.0 # For HPSv2 evaluation (如果需要评估)
-datasets>=2.10.0 # For downloading prompt dataset
+einops>=0.6.0 # Might be needed by underlying models
+timm>=0.6.0   # Might be needed by underlying models
+
+# Specific Tools
+hpsv2>=0.1.0 # For evaluation script
+datasets>=2.10.0 # For extracting prompts
 tensorboard # For logging with accelerate
 
-# 可能需要的其他依赖
+# Optional/Common
 sentencepiece
 ftfy
-protobuf # 如果遇到 protobuf 相关问题
+protobuf
 ```
+*(Ensure PyTorch is installed first via Conda matching your CUDA version, then run `pip install -r requirements.txt`)*
 
-## 使用流程
+## Step-by-Step Usage
 
-### 1. 提取 Prompts (`scripts/extract_prompts.py`)
+### Step 1: Prepare Prompts
 
-从 Hugging Face Hub 下载数据集（如 Pick-a-Pic）并提取 prompts。
+Use the script to download prompts from a dataset like Pick-a-Pic.
 
-**命令:**
 ```bash
 python scripts/extract_prompts.py \
 	--dataset_name yuvalkirstain/pickapic_v1 \
 	--split train \
-	--caption_column caption \
 	--output_dir ./data \
-	--output_filename pickapic_prompts.txt
+	--output_filename prompts.txt
 ```
-* 这会将 Pick-a-Pic 训练集的 `caption` 列保存到 `./data/pickapic_prompts.txt`。
+This will save prompts to `./data/prompts.txt`. You can also prepare your own `.txt` file with one prompt per line. Create a separate file (e.g., `./data/test_prompts.txt`) for evaluation later.
 
-### 2. 生成噪声序列数据集 (`src/generate_npd.py`)
+### Step 2: Generate Noise Sequence Dataset
 
-使用步骤 1 的 prompts 文件和基础扩散模型（如 SDXL）生成噪声演化序列。
+Use the prepared prompts and a base diffusion model (SDXL recommended) to generate the sequential noise data.
 
-**命令:**
 ```bash
-python src/generate_npd.py \
-	--prompt_file ./data/pickapic_prompts.txt \
+# Ensure you are in the CS5340_PROJECT directory
+python src/generate_npd_series.py \
+	--prompt_file ./data/prompts.txt \
 	--output_dir ./data/npd_sequence_dataset_sdxl/ \
-	--num_steps 10 `# 生成 10 步的序列` \
-	--max_prompts 1000 `# (可选) 只处理前 1000 个 prompt` \
-	--output_size 1024
+	--num_steps 10 \
+	--max_prompts 1000 # Adjust as needed for dataset size
 ```
-* `--num_steps`: 指定要生成的黄金噪声演化步数 (n)。
-* `--max_prompts`: (可选) 限制处理的 prompt 数量，用于快速测试或生成小数据集。
-* **重要:** 此过程非常耗时！可以考虑使用 `--max_prompts` 限制数量。输出保存在 `--output_dir` 指定的目录。
+* `--num_steps`: Number of golden noise steps ($n$) to generate per prompt.
+* `--max_prompts`: Limits the number of prompts processed (useful for creating smaller test datasets). Remove to process all prompts.
+* This script saves `_source.pt` and `_golden_sequence.pt` files in the `sequences` sub-directory and creates a `metadata.csv`.
+* **Warning:** This step is computationally intensive and time-consuming.
 
-### 3. 训练模型
+### Step 3: Train the RNN Sequence Model
 
-根据你想训练的模型选择对应的脚本：
+Train the `NoiseSequenceRNN_v3` model on the generated dataset using `accelerate`.
 
-**a) 训练原始 NPNet (`src/train.py`)**
-* **注意:** 这个脚本需要 `(source_noise, target_noise)` 对的数据集，而不是序列数据集。你需要运行原始版本的 `generate_npd.py`（只生成一步 golden noise 并进行 HPSv2 筛选）来创建适配的数据。
-* **命令示例:**
-	```bash
-	accelerate launch src/train.py \
-		--dataset_dir <path_to_original_npd_data> \
-		--output_dir ./npnet_training_output/ \
-		--npnet_model_id SDXL \
-		--base_model_id stabilityai/stable-diffusion-xl-base-1.0 \
-		--num_epochs 30 \
-		--batch_size 16 \
-		# ... 其他训练参数 ...
-		# --- NPNet 配置参数 ---
-		# --svd_dropout --nt_adapter --cross_attention
-	```
+```bash
+# Ensure PYTHONPATH includes the project root if running from root
+# export PYTHONPATH=. (or use PYTHONPATH=. before accelerate)
 
-**b) 训练 Transformer 序列模型 (`src/train_seq_model.py`)**
-* 使用步骤 2 生成的序列数据集。
-* **命令示例:**
-	```bash
-	accelerate launch src/train_seq_model.py \
-		--dataset_dir ./data/npd_sequence_dataset_sdxl/ \
-		--output_dir ./seq_model_training_output/ \
-		--base_model_id stabilityai/stable-diffusion-xl-base-1.0 \
-		--npnet_model_id SDXL \
-		--text_embed_dim 1024 `# 调整!` \
-		--noise_resolution 128 \
-		--patch_size 16 \
-		--d_model 768 \
-		--nhead 12 \
-		--num_encoder_layers 4 \
-		--num_decoder_layers 4 \
-		--dim_feedforward 2048 \
-		--max_seq_len 11 `# dataset_num_steps + 1` \
-		--predict_variance `# 可选` \
-		--num_epochs 50 \
-		--batch_size 8 \
-		--gradient_accumulation_steps 4 \
-		--learning_rate 5e-5
-		# ... 其他训练参数 ...
-	```
-* `--max_seq_len` 应设为数据集中 `num_steps + 1`（因为输入包含 $x_T$）。
-* `--text_embed_dim` 需要根据你使用的 `base_model_id` 和 `encode_text` 函数的实际输出维度设置。
+accelerate launch src/train_rnn_model_v3.py \
+	--dataset_dir ./data/npd_sequence_dataset_sdxl/ \
+	--output_dir ./output/rnn_v3_seq_model_output/ \
+	--base_model_id stabilityai/stable-diffusion-xl-base-1.0 \
+	--npnet_model_id SDXL `# For text dim hint` \
+	--text_embed_dim 1280 `# Adjust if using different base model/embedding` \
+	--noise_resolution 128 \
+	--cnn_base_filters 64 \
+	--cnn_num_blocks 2 2 2 2 \
+	--cnn_feat_dim 512 \
+	--gru_hidden_size 1024 \
+	--gru_num_layers 2 \
+	--predict_variance `# Add if you want variance prediction` \
+	--kl_weight 0.01 `# Add if using variance prediction and KL loss` \
+	--num_epochs 50 \
+	--batch_size 8 `# Adjust based on GPU memory` \
+	--gradient_accumulation_steps 4 `# Adjust based on GPU memory` \
+	--learning_rate 1e-4 \
+	--mixed_precision fp16 \
+	--save_steps 1000 \
+	--max_checkpoints 3 `# Limit disk usage`
+```
+* Adjust hyperparameters (batch size, learning rate, model dimensions, etc.) based on your resources and dataset.
+* The `--text_embed_dim` should match the dimension of the text embedding used (e.g., 1280 for SDXL's pooled CLIP-G).
+* Checkpoints and logs will be saved in `--output_dir`.
 
-**c) 训练改进版 RNN 序列模型 (`src/train_rnn_model_v2.py`)**
-* 使用步骤 2 生成的序列数据集。
-* **命令示例:**
-	```bash
-	accelerate launch src/train_rnn_model_v2.py \
-		--dataset_dir ./data/npd_sequence_dataset_sdxl/ \
-		--output_dir ./rnn_v2_seq_model_output/ \
-		--base_model_id stabilityai/stable-diffusion-xl-base-1.0 \
-		--npnet_model_id SDXL \
-		--text_embed_dim 1280 `# 调整! (SDXL pooled)` \
-		--noise_resolution 128 \
-		--cnn_base_filters 64 \
-		--cnn_num_blocks 2 2 2 2 \
-		--cnn_feat_dim 512 \
-		--gru_hidden_size 1024 \
-		--gru_num_layers 2 \
-		--predict_variance `# 可选` \
-		--predict_residual `# 可选` \
-		--kl_weight 0.01 `# 可选 (如果 predict_variance=True)` \
-		--num_epochs 50 \
-		--batch_size 16 \
-		--gradient_accumulation_steps 2 \
-		--learning_rate 1e-4
-		# ... 其他训练参数 ...
-	```
-* 调整 CNN 和 GRU 的参数。
-* `--text_embed_dim` 同样需要确认，这里假设使用 SDXL 的 pooled embedding (1280)。
-* 使用 `--predict_residual` 和 `--kl_weight` 启用相应功能。
+### Step 4: Inference (Single Prompt)
 
-### 4. 推理 (`src/inference.py`)
+Use the trained RNN model to generate an image for a specific prompt.
 
-* **当前版本主要适配原始 NPNet 模型。**
-* **命令示例 (使用训练好的 NPNet):**
-	```bash
-	python src/inference.py \
-		--npnet_weights_path ./npnet_training_output/npnet_final.pth \
-		--prompt "A cute cat wearing a wizard hat" \
-		--base_model_id stabilityai/stable-diffusion-xl-base-1.0 \
-		--output_dir ./inference_output/ \
-		--npnet_model_id SDXL \
-		--seed 123 \
-		--generate_standard \
-		# --- 添加与训练时匹配的 NPNet 配置 flags ---
-		# --svd_dropout --nt_adapter --cross_attention
-	```
-* **对于序列模型 (Transformer/RNN):**
-	* 你需要加载对应的序列模型权重。
-	* 调用模型的 `generate_sequence(initial_noise, text_embed, num_steps)` 方法来生成噪声序列。
-	* 选择序列中的最后一步噪声 (`generated_sequence[:, -1]`) 作为最终的黄金噪声。
-	* 将这个最终噪声传递给基础扩散模型 (`pipe(..., latents=final_golden_noise, ...)`).
-	* 这需要修改 `inference.py` 或创建一个新的推理脚本。
+```bash
+# Ensure PYTHONPATH includes the project root if running from root
+# export PYTHONPATH=.
 
-### 5. 评估 (`src/evaluate.py`)
+python src/inference_rnn.py \
+	--rnn_weights_path ./output/rnn_v3_seq_model_output/rnn_v3_model_final.pth \
+	--prompt "A futuristic cityscape at sunset, synthwave style" \
+	--output_dir ./inference_output/ \
+	--base_model_id stabilityai/stable-diffusion-xl-base-1.0 \
+	--num_gen_steps 10 `# MUST match dataset num_steps` \
+	--num_inference_steps 30 \
+	--guidance_scale 5.5 \
+	--seed 12345 \
+	--generate_standard \
+	--dtype float16 \
+	# --- Add model config flags matching the trained model ---
+	# e.g., --predict_variance (if trained with it)
+	# (Other model dimension args are hardcoded in this script for now)
+```
+* Replace `--rnn_weights_path` with the actual path to your trained model.
+* Set `--num_gen_steps` to the same value used during dataset generation.
+* The script will save both the standard noise image and the golden noise image (if `--generate_standard` is used).
 
-* **当前版本主要适配原始 NPNet 模型。**
-* **命令示例 (评估 NPNet):**
-	```bash
-	python src/evaluate.py \
-		--npnet_weights_path ./npnet_training_output/npnet_final.pth \
-		--evaluation_prompts_file <path/to/eval_prompts.txt> \
-		--base_model_id stabilityai/stable-diffusion-xl-base-1.0 \
-		--output_dir ./evaluation_output/ \
-		--npnet_model_id SDXL \
-		--metrics hpsv2 \
-		--save_images \
-		# --- 添加与训练时匹配的 NPNet 配置 flags ---
-		# --svd_dropout --nt_adapter --cross_attention
-	```
-* **对于序列模型:**
-	* 评估逻辑需要修改，以使用序列模型的 `generate_sequence` 方法获取最终黄金噪声，然后再进行图像生成和指标计算。
-	* 可能需要创建一个新的评估脚本。
+### Step 5: Batch Inference (Multiple Prompts)
 
-## 模型配置参数
+Generate images for all prompts listed in a file.
 
-在运行 `train.py`, `inference.py`, `evaluate.py` 时，需要使用与模型训练时**完全一致**的配置参数来确保模型结构匹配权重文件：
+```bash
+# Ensure PYTHONPATH includes the project root if running from root
+# export PYTHONPATH=.
 
-* `--svd_dropout`: (NPNet) SVDNoiseUnet 是否启用 dropout/layernorm。
-* `--nt_adapter`: (NPNet) NoiseTransformer 是否启用 adapter。
-* `--nt_finetune`: (NPNet) NoiseTransformer 是否启用 finetuning。
-* `--nt_dropout`: (NPNet) NoiseTransformer 是否启用 dropout。
-* `--cross_attention`: (NPNet) NPNet 是否启用 cross-attention。
-* (对于序列模型，需要传递对应的 Transformer 或 RNN/CNN 参数)。
+python scripts/batch_inference.py \
+	--prompt_file ./data/test_prompts.txt \
+	--output_base_dir ./inference_output/ \
+	--rnn_weights_path ./output/rnn_v3_seq_model_output/rnn_v3_model_final.pth \
+	--base_model_id stabilityai/stable-diffusion-xl-base-1.0 \
+	--num_gen_steps 10 \
+	--start_seed 1000 # Use a different starting seed than training/single inference
+	# --- Add necessary model config flags ---
+	# --predict_variance
+```
+* This script reads prompts from `--prompt_file`.
+* It saves standard images to `<output_base_dir>/standard_output/` and golden noise images to `<output_base_dir>/gnsnet_output/`.
+* Images are named `{index}.png` corresponding to the line number in the prompt file.
 
-<!-- ## 引用
+### Step 6: Evaluation (HPSv2)
 
-如果你的研究或工作得益于原始论文，请考虑引用：
+Evaluate the generated image pairs using the HPSv2 score.
 
+```bash
+# Ensure hpsv2 is installed: pip install hpsv2
+python scripts/evaluate_hps.py \
+	--prompt_file ./data/test_prompts.txt \
+	--image_base_dir ./inference_output/ \
+	--results_dir ./results/ \
+	--hps_version v2.1
+```
+* `--prompt_file` should be the same file used for batch inference.
+* `--image_base_dir` points to the directory containing `standard_output` and `gnsnet_output`.
+* Results are saved to `<results_dir>/hpsv2_evaluation.csv`.
+
+<!-- ## Citation
+
+If using concepts from the original paper, please cite:
 ```bibtex
 @article{zhou2024golden,
 	title={Golden Noise for Diffusion Models: A Learning Framework},
@@ -267,10 +246,9 @@ python src/generate_npd.py \
 	journal={arXiv preprint arXiv:2411.09502},
 	year={2024}
 }
-``` -->
+```
 
-<!-- ## 许可证
+## License
 
-(在此处添加你的项目许可证信息, 例如 MIT License)
-
+(Specify your project's license here, e.g., MIT License)
 ``` -->
