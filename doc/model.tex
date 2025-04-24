@@ -1,0 +1,82 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx} % 如果需要插入图示
+
+\begin{document}
+
+\section{序列化黄金噪声生成模型}
+
+\subsection{动机与直觉}
+传统的文本到图像扩散模型通常从一个随机高斯噪声 $x_T \sim \mathcal{N}(0, I)$ 开始，逐步去噪以生成图像。论文 \cite{zhou2024golden} 提出，可以使用一个预训练的网络 (NPNet) 将 $x_T$ 映射到一个“黄金噪声” $x'_T$，该噪声包含了与文本提示 $c$ 相关的语义信息，作为扩散过程的新起点，可能提升生成质量。其数据集通过一步去噪和一步加噪（DDIM + DDIM-Inverse）并结合 AI 反馈（如 HPSv2）构建 $(x_T, c, x'_T)$ 数据对。
+
+我们观察到，原始论文中生成 $x'_T$ 的过程（一步 DDIM Denoise + 一步 DDIM Inversion）可以被迭代多次。直觉上，随着迭代次数 $k$ 的增加，得到的噪声 $x'_k$ 会逐步融入更多与文本提示 $c$ 相关的结构和语义信息，形成一个从随机噪声向“理想”条件化噪声演化的序列 $[x'_1, x'_2, \dots, x'_n]$。这个演化过程可以被建模为一个受文本条件 $c$ 引导的一阶马尔可夫链，即当前噪声 $x'_k$ 的生成主要依赖于上一步的噪声 $x'_{k-1}$ 和文本条件 $c$：
+\begin{equation}
+    p(x'_k | x'_{k-1}, x'_{k-2}, \dots, x'_1, x_T, c) \approx p(x'_k | x'_{k-1}, c)
+\end{equation}
+这种序列依赖和条件生成的特性非常适合使用循环神经网络 (RNN) 或其变体（如 GRU, LSTM）进行建模。
+
+此外，为了确保生成的序列噪声 $x'_k$ 能够作为扩散模型的有效起点，它们应保持接近标准高斯分布 $\mathcal{N}(0, I)$ 的统计特性。这需要在模型设计和训练目标中显式地加入约束。
+
+\subsection{模型架构: NoiseSequenceRNN-v3}
+基于上述考虑，我们设计了一个基于 GRU 的序列模型 (NoiseSequenceRNN-v3)，其目标是学习条件转移概率 $p_\theta(x'_k | x'_{k-1}, c)$。模型结构如下：
+
+\begin{enumerate}
+    \item \textbf{噪声编码器 (Noise Encoder):} 使用一个基于 ResNet 风格块（包含组归一化 GroupNorm 和 SiLU 激活函数）的卷积神经网络 (CNN) $E_\phi$ 将上一步的噪声 $x'_{k-1} \in \mathbb{R}^{C \times H \times W}$ 编码为一个低维特征向量 $f_{k-1} \in \mathbb{R}^{D_{feat}}$：
+        \begin{equation}
+            f_{k-1} = E_\phi(x'_{k-1})
+        \end{equation}
+
+    \item \textbf{文本嵌入处理:} 将预训练的文本编码器（如 CLIP）输出的文本嵌入 $c \in \mathbb{R}^{D_{text}}$ （通常使用其 pooled output）通过一个线性层投影到 $c_{proj} \in \mathbb{R}^{D_{proj}}$ （可选，用于维度匹配）。
+
+    \item \textbf{GRU 状态更新:} 将编码后的噪声特征 $f_{k-1}$ 和投影后的文本嵌入 $c_{proj}$ 拼接起来，作为 GRU 单元的输入，更新隐藏状态 $h_k \in \mathbb{R}^{D_{hidden}}$：
+        \begin{equation}
+            h_k = \text{GRU}( [f_{k-1}; c_{proj}], h_{k-1} )
+        \end{equation}
+        其中 $[;]$ 表示向量拼接。这使得 RNN 的状态转换同时依赖于前一步的噪声和全局文本条件。
+
+    \item \textbf{FiLM 参数生成:} 使用文本嵌入 $c$ 通过一个或多个线性层（FiLM Generator, $G_\psi$）预测用于特征调制（FiLM）的缩放参数 $\gamma_k$ 和偏移参数 $\beta_k$。这些参数将用于解码器：
+        \begin{equation}
+            (\gamma_k, \beta_k) = G_\psi(c)
+        \end{equation}
+
+    \item \textbf{噪声解码器 (Noise Decoder):} 使用一个与编码器结构对称的 ResNet 风格 CNN 解码器 $D_\omega$，以 GRU 的隐藏状态 $h_k$ 作为输入。在解码器的中间层，应用 FiLM 层，使用步骤 4 生成的 $(\gamma_k, \beta_k)$ 对特征图进行调制。解码器最终输出下一步噪声 $x'_k$ 的分布参数，即均值 $\mu_k \in \mathbb{R}^{C \times H \times W}$ 和对数方差 $\log \sigma^2_k \in \mathbb{R}^{C \times H \times W}$：
+        \begin{equation}
+            (\mu_k, \log \sigma^2_k) = D_\omega(h_k, \text{FiLM params}=(\gamma_k, \beta_k))
+        \end{equation}
+        模型直接预测完整状态 $x'_k$ 的分布，而不是残差。
+
+\end{enumerate}
+
+\subsection{训练目标}
+模型使用教师强制 (Teacher Forcing) 进行训练。对于序列中的每一步 $k=1, \dots, n$，我们计算两个损失项：
+
+\begin{enumerate}
+    \item \textbf{负对数似然损失 (NLL Loss):} 最大化观测到目标噪声 $x'_k$ 的概率，等价于最小化 NLL 损失。假设预测分布为高斯 $\mathcal{N}(\mu_k, \sigma^2_k)$，其中 $\sigma^2_k = \exp(\log \sigma^2_k)$：
+        \begin{equation}
+            \mathcal{L}_{NLL}^{(k)} = -\log p_\theta(x'_k | x'_{k-1}, c) \propto \frac{1}{2} \sum_{i} \left( \frac{(x'_{k,i} - \mu_{k,i})^2}{\sigma^2_{k,i}} + \log \sigma^2_{k,i} \right)
+        \end{equation}
+        其中 $i$ 遍历噪声张量的所有元素。
+
+    \item \textbf{KL 散度正则化损失 (KL Loss):} 为了约束预测的噪声分布接近标准高斯分布 $\mathcal{N}(0, I)$，我们计算两者之间的 KL 散度：
+        \begin{equation}
+            \mathcal{L}_{KL}^{(k)} = D_{KL}(\mathcal{N}(\mu_k, \sigma^2_k) || \mathcal{N}(0, I)) = \frac{1}{2} \sum_{i} (\sigma^2_{k,i} + \mu_{k,i}^2 - 1 - \log \sigma^2_{k,i})
+        \end{equation}
+\end{enumerate}
+
+总损失是这两项的加权和，对序列中的所有步骤求平均（或加权平均）：
+\begin{equation}
+    \mathcal{L}_{Total} = \frac{1}{n} \sum_{k=1}^{n} (\mathcal{L}_{NLL}^{(k)} + \lambda_{KL} \mathcal{L}_{KL}^{(k)})
+\end{equation}
+其中 $\lambda_{KL}$ 是 KL 散度损失的权重超参数。
+
+\subsection{推理}
+在推理阶段，模型以自回归方式生成噪声序列。从初始噪声 $x_T$ 开始，迭代 $n$ 步：
+\begin{enumerate}
+    \item 使用当前噪声 $x'_{k-1}$ 和文本嵌入 $c$ 输入模型，得到预测的分布参数 $(\mu_k, \log \sigma^2_k)$。
+    \item 从预测的高斯分布 $\mathcal{N}(\mu_k, \exp(\log \sigma^2_k))$ 中采样得到下一步噪声 $\hat{x}'_k$。
+    \item 将 $\hat{x}'_k$ 作为下一步的输入。
+\end{enumerate}
+最终生成的序列为 $[\hat{x}'_1, \dots, \hat{x}'_n]$。通常选择最后一步 $\hat{x}'_n$ 作为输入到基础扩散模型中的“黄金噪声”。
+
+\end{document}

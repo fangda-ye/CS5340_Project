@@ -1,0 +1,42 @@
+PYTHONPATH=. accelerate launch src/train_rnn_model_v2.py \
+    --mixed_precision fp16 \
+    --dataset_dir ./data/npd_sequence_dataset_sdxl/ \
+    --output_dir ./output/rnn_v2_seq_model_output/ \
+    --base_model_id stabilityai/stable-diffusion-xl-base-1.0 \
+    --npnet_model_id SDXL \
+    --text_embed_dim 1280 \
+    --noise_resolution 128 \
+    --cnn_base_filters 64 \
+    --cnn_num_blocks 2 2 2 2 \
+    --cnn_feat_dim 512 \
+    --gru_hidden_size 1024 \
+    --gru_num_layers 2 \
+    --predict_variance  \
+    --predict_residual  \
+    --kl_weight 0.01  \
+    --num_epochs 50 \
+    --batch_size 8 \
+    --gradient_accumulation_steps 2 \
+    --learning_rate 1e-4
+
+PYTHONPATH=. accelerate launch src/train_rnn_model_v3.py \
+    --mixed_precision fp16 \
+    --dataset_dir ./data/npd_sequence_dataset_sdxl/ \
+    --output_dir ./output/rnn_v3_seq_model_output/ \
+    --base_model_id stabilityai/stable-diffusion-xl-base-1.0 \
+    --npnet_model_id SDXL \
+    --text_embed_dim 1280 \
+    --noise_resolution 128 \
+    --cnn_base_filters 64 \
+    --cnn_num_blocks 2 2 2 2 \
+    --cnn_feat_dim 512 \
+    --gru_hidden_size 1024 \
+    --gru_num_layers 2 \
+    --predict_variance \
+    --kl_weight 0.01 \
+    --num_epochs 50 \
+    --batch_size 8 \
+    --gradient_accumulation_steps 4 \
+    --learning_rate 1e-4 \
+    --save_steps 1000  \
+    --max_checkpoints 3 \
