@@ -26,3 +26,4 @@ PYTHONPATH=. python scripts/batch_inference.py \
     --output_base_dir ./inference_output/ \
     --rnn_weights_path ./output/rnn_v3_seq_model_output/rnn_v3_model_final.pth \
     --base_model_id stabilityai/stable-diffusion-xl-base-1.0 \
+    --start_seed 1000

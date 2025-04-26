@@ -1,4 +1,4 @@
-# Sequential Golden Noise Generation with RNN
+# GNSNet: Modeling Sequential Golden Noise Evolution
 
 This project explores the concept of generating a sequence of "golden noises" for text-to-image diffusion models, inspired by the ideas in "Golden Noise for Diffusion Models: A Learning Framework" (arXiv:2411.09502). Instead of predicting a single optimal noise, this implementation focuses on modeling the *evolutionary process* where noise is iteratively refined based on a text prompt, using a Recurrent Neural Network (RNN) based architecture (`NoiseSequenceRNN_v3`).
 
@@ -13,6 +13,8 @@ The core workflow involves:
 CS5340_PROJECT/
 ├── data/                     # Datasets
 │   ├── prompts.txt           # Input prompts for dataset generation
+│   ├── pickapic_prompts.txt  # Input prompts from pickapic dataset for dataset generation
+│   ├── pickapic_test_prompts.txt # Prompts for evaluation/testing
 │   ├── test_prompts.txt      # Prompts for evaluation/testing
 │   └── npd_sequence_dataset_sdxl/ # Generated sequence dataset (example)
 │       ├── sequences/        # Saved noise sequence files (.pt)
@@ -40,11 +42,11 @@ CS5340_PROJECT/
 │   ├── dataset.py            # PyTorch Dataset and DataLoader for sequence data
 │   ├── generate_npd_series.py # Script to generate the noise sequence dataset
 │   ├── inference_rnn.py      # Script to run inference with the RNN model
+│   ├── train_rnn_model_v3.py # Script to train the RNN model (V3) with pickapic_prompts
 │   └── train_rnn_model_v3.py # Script to train the RNN model (V3)
 ├── LICENSE                   # Project License
 └── README.md                 # This file
 ```
-*(Note: Original NPNet related files like `NoiseTransformer.py`, `SVDNoiseUnet.py`, `npnet.py`, `train.py` etc. are assumed removed as per user request)*
 
 ## Setup
 
@@ -55,7 +57,7 @@ CS5340_PROJECT/
 
 2.  **Clone Repository:**
 	```bash
-	git clone <your-repo-url>
+	git clone https://github.com/fangda-ye/CS5340_Project.git
 	cd CS5340_PROJECT
 	```
 
@@ -73,37 +75,6 @@ CS5340_PROJECT/
 	# Install other dependencies
 	pip install -r requirements.txt
 	```
-
-## `requirements.txt` (Example)
-
-```txt
-# PyTorch (Install via Conda specific to your CUDA version first)
-# torch>=1.13.0
-# torchvision
-# torchaudio
-
-# Core Libraries
-diffusers>=0.21.0
-transformers>=4.25.0
-accelerate>=0.20.0
-pandas>=1.3.0
-numpy>=1.20.0
-Pillow>=9.0.0
-tqdm>=4.60.0
-einops>=0.6.0 # Might be needed by underlying models
-timm>=0.6.0   # Might be needed by underlying models
-
-# Specific Tools
-hpsv2>=0.1.0 # For evaluation script
-datasets>=2.10.0 # For extracting prompts
-tensorboard # For logging with accelerate
-
-# Optional/Common
-sentencepiece
-ftfy
-protobuf
-```
-*(Ensure PyTorch is installed first via Conda matching your CUDA version, then run `pip install -r requirements.txt`)*
 
 ## Step-by-Step Usage
 
@@ -170,6 +141,7 @@ accelerate launch src/train_rnn_model_v3.py \
 * Adjust hyperparameters (batch size, learning rate, model dimensions, etc.) based on your resources and dataset.
 * The `--text_embed_dim` should match the dimension of the text embedding used (e.g., 1280 for SDXL's pooled CLIP-G).
 * Checkpoints and logs will be saved in `--output_dir`.
+* Alternatively, you can directly use our pretrained model: https://drive.google.com/file/d/13pFW7f0lR37jenEtuUPu9pYwOBkvY0Li/view?usp=drive_link
 
 ### Step 4: Inference (Single Prompt)
 
@@ -240,12 +212,7 @@ python scripts/evaluate_hps.py \
 
 If using concepts from the original paper, please cite:
 ```bibtex
-@article{zhou2024golden,
-	title={Golden Noise for Diffusion Models: A Learning Framework},
-	author={Zhou, Zikai and Shao, Shitong and Bai, Lichen and Xu, Zhiqiang and Han, Bo and Xie, Zeke},
-	journal={arXiv preprint arXiv:2411.09502},
-	year={2024}
-}
+come soon
 ```
 
 ## License
